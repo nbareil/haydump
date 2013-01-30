@@ -24,14 +24,14 @@ func PacketMunger(queue <-chan *pcap.Packet) {
 			if _, present := sessions[hash]; !present {
 				sessions[hash] = make(chan *pcap.Packet, 512)
 				go SessionHandler(hash, sessions[hash], sigchild)
-				log.Printf("Spawning session %#x\n", hash)
+				log.Printf("%#x Spawning session\n", hash)
 			}
 			sessions[hash] <- pkt
 
 		case sessionid := <-sigchild:
 			close(sessions[sessionid])
 			delete(sessions, sessionid)
-			log.Printf("Killed %#x\n", sessionid)
+			log.Printf("%#x Killed\n", sessionid)
 		}
 	}
 }
@@ -42,13 +42,13 @@ func SessionHandler(hash uint64, incoming <-chan *pcap.Packet, sigchild chan uin
 		if _, tcpOk := layer.(*pcap.Tcphdr); tcpOk {
 			TcpSessionHandler(hash, incoming, sigchild)
 			return
-		} else {
-			go func(incoming <-chan *pcap.Packet) {
-				for {
-					_ = <-incoming
-				}
-			}(incoming)
+
 		}
+	}
+
+	// XXX: If no handler found
+	for {
+		_ = <-incoming
 	}
 }
 
@@ -60,23 +60,22 @@ func TcpSessionHandler(hash uint64, incoming <-chan *pcap.Packet, sigchild chan 
 		select {
 		case pkt, ok := <-incoming:
 			if !ok {
-				log.Printf("Channel %#x closed!\n", hash)
+				log.Printf("%#x Channel closed!\n", hash)
 				return
 			}
 
 			for _, layer := range pkt.Headers {
 				if tcp, tcpOk := layer.(*pcap.Tcphdr); tcpOk {
 					if (tcp.Flags & pcap.TCP_FIN) == pcap.TCP_FIN {
-						log.Println(pkt)
 						finSent[tcp.SrcPort] = true
-						log.Println(finSent)
 						if val, present := finSent[tcp.DestPort]; present && val {
-							log.Printf("Kill me now (%#x)\n", hash)
+							log.Printf("%#x Kill me now\n", hash)
 							sigchild <- hash
 						}
 					}
 				}
 			}
+
 		case <-timeout:
 			sigchild <- hash // you can kill me dady!
 		}
@@ -134,7 +133,10 @@ func main() {
 
 	for {
 		frame := p.Next()
-		if frame != nil {
+		if frame == nil {
+			time.Sleep(100)
+			continue
+		} else {
 			munger <- frame
 		}
 	}
